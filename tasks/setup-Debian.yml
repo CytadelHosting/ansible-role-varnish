@@ -9,14 +9,23 @@
         state: present
 
     - name: Add packagecloud.io Varnish apt key.
-      apt_key:
-        url: https://packagecloud.io/varnishcache/{{ varnish_packagecloud_repo }}/gpgkey
-        state: present
+      get_url:
+        url: "https://packagecloud.io/varnishcache/{{ varnish_packagecloud_repo }}/gpgkey"
+        dest: "/usr/share/keyrings/varnishcache_{{ varnish_packagecloud_repo }}-archive-keyring.asc"
+        mode: 644
+      # check_mode: false
+      diff: true
 
     - name: Add packagecloud.io Varnish apt repository.
       apt_repository:
-        repo: "{{ varnish_apt_repo }}"
+        repo: "{{ item }} [signed-by=/usr/share/keyrings/varnishcache_{{ varnish_packagecloud_repo }}-archive-keyring.asc] {{ varnish_apt_repo }}"
+        filename: 'varnish-cache'
         state: present
+      loop:
+        - 'deb'
+        - 'deb-src'
+      # check_mode: false
+      diff: true
   when: varnish_apt_use_packagecloud
 
 - name: Ensure Varnish is installed.
