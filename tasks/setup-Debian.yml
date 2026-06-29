@@ -20,6 +20,31 @@
          else varnish_packagecloud_apt_key_url }}
   when: varnish_apt_repo_source != 'distribution'
 
+# Nettoie l'ancien nom de fichier du fork (packagecloud) avant migration.
+- name: Remove obsolete Varnish apt source file.
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/varnish-cache.list
+    state: absent
+  when: varnish_apt_repo_source != 'distribution'
+
+# Évite le conflit "Signed-By" quand le même dépôt existe dans les deux
+# formats (ex: enregistré à la main en .list, puis géré ici en .sources).
+- name: Remove conflicting .list Varnish repository (deb822 mode).
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/varnish.list
+    state: absent
+  when:
+    - varnish_apt_repo_source != 'distribution'
+    - varnish_apt_use_deb822 | bool
+
+- name: Remove conflicting .sources Varnish repository (legacy .list mode).
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/varnish.sources
+    state: absent
+  when:
+    - varnish_apt_repo_source != 'distribution'
+    - not (varnish_apt_use_deb822 | bool)
+
 # Format moderne deb822 : le module télécharge la clé dans
 # /etc/apt/keyrings/varnish.asc et écrit le Signed-By correspondant.
 - name: Add Varnish apt repository (deb822).
