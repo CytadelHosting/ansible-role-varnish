@@ -35,18 +35,38 @@ varnishd_extra_options: ""
 varnish_enabled_services:
   - varnish
 
-# Use Packagecloud repo instead of distribution default
-varnish_apt_use_packagecloud: true
-
 # Make sure Packagecloud repo is used on RHEL/CentOS.
 varnish_packagecloud_repo_yum_repository_priority: "1"
 
 # Only used on RedHat / CentOS.
 varnish_yum_repo_baseurl: https://packagecloud.io/varnishcache/{{ varnish_packagecloud_repo }}/el/{{ ansible_facts.distribution_major_version|int }}/$basearch
 
-# Only used on Debian / Ubuntu.
-#varnish_apt_repo: https://packagecloud.io/varnishcache/{{ varnish_packagecloud_repo }}/{{ ansible_distribution | lower }}/ {{ ansible_distribution_release }} main
-varnish_apt_repo: deb https://packagecloud.io/varnishcache/{{ varnish_packagecloud_repo }}/{{ ansible_facts.distribution | lower }}/ {{ ansible_facts.distribution_release }} main
+# --- Dépôt APT (Debian / Ubuntu uniquement) -------------------------------
+# Source du dépôt Varnish :
+#   official     -> dépôt officiel Varnish Software (packages.varnish-software.com)
+#   packagecloud -> dépôt communautaire packagecloud.io (versionné, ex: varnish80)
+#   distribution -> dépôt natif de l'OS (on n'ajoute aucun dépôt externe)
+varnish_apt_repo_source: official
+
+# Dépôt officiel : sert la dernière ligne stable (l'épinglage ci-dessous
+# choisit la version effective). Le codename réel de l'OS est utilisé.
+varnish_official_apt_repo_url: "https://packages.varnish-software.com/varnish/{{ ansible_facts.distribution | lower }}"
+varnish_official_apt_key_url: "https://packages.varnish-software.com/varnish/varnish.pub.asc"
+
+# Dépôt packagecloud.io : versionné par ligne via varnish_packagecloud_repo.
+varnish_packagecloud_apt_repo_url: "https://packagecloud.io/varnishcache/{{ varnish_packagecloud_repo }}/{{ ansible_facts.distribution | lower }}"
+varnish_packagecloud_apt_key_url: "https://packagecloud.io/varnishcache/{{ varnish_packagecloud_repo }}/gpgkey"
+
+# Format moderne deb822 (.sources) quand la distro le supporte.
+# Forcez à false pour garder l'ancien format .list (ex: Debian 11/12).
+varnish_apt_use_deb822: "{{ (ansible_facts.distribution == 'Debian' and ansible_facts.distribution_major_version | int >= 11) or (ansible_facts.distribution == 'Ubuntu' and ansible_facts.distribution_version is version('20.04', '>=')) }}"
+
+# Épinglage (apt pinning) de la version, dérivé de varnish_version :
+#   '8.0'   -> '8.0*'   (dernier patch de la ligne 8.0.x)
+#   '8.0.2' -> '8.0.2*' (cible exacte)
+# Mettez '' pour désactiver l'épinglage et laisser apt choisir la plus récente.
+varnish_apt_pin_version: "{{ varnish_version }}*"
+varnish_apt_pin_priority: "1001"
 
 # Optionally define additional backends.
 # varnish_backends:

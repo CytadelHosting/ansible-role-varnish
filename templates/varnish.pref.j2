@@ -1,0 +1,5 @@
+# Géré par Ansible (rôle varnish) - ne pas éditer à la main.
+# Épingle Varnish et ses VMODs sur la version cible (varnish_version).
+Package: varnish varnish-* vmod-* libvarnish*
+Pin: version {{ varnish_apt_pin_version }}
+Pin-Priority: {{ varnish_apt_pin_priority }}

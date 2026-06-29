@@ -1,44 +1,80 @@
 ---
-- name: Configure packagecloud.io repository
-  block:
-    - name: Ensure dependencies are present.
-      apt:
-        name:
-          - apt-transport-https
-          - gnupg2
-        state: present
-
-    # apt-key is deprecated and absent since debian 13 (trixie).
-    # The new way to do this without adding an extra gpg --dearmor task is to use get_url to download the file
-    # into the trusted.gpg.d folder with the .asc filename
-    - name: Add packagecloud.io Varnish apt key.
-      ansible.builtin.get_url:
-        url: https://packagecloud.io/varnishcache/{{ varnish_packagecloud_repo }}/gpgkey
-        dest: /etc/apt/trusted.gpg.d/varnishcache_{{ varnish_packagecloud_repo }}-archive-keyring.asc
-        mode: '0644'
-        force: true
-      # check_mode: false
-      diff: true
-
-    - name: Add packagecloud.io Varnish apt repository.
-      apt_repository:
-        repo: "{{ item }} [signed-by=/usr/share/keyrings/varnishcache_{{ varnish_packagecloud_repo }}-archive-keyring.asc] {{ varnish_apt_repo }}"
-        filename: 'varnish-cache'
-        state: present
-      loop:
-        - 'deb'
-        - 'deb-src'
-      # check_mode: false
-      diff: true
-  when: varnish_apt_use_packagecloud
-
-- name: Ensure Varnish is installed.
-  apt:
-    name: "{{ varnish_package_name }}"
+- name: Ensure apt dependencies are present.
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - gnupg2
     state: present
 
+# On centralise URL du dépôt et URL de la clé selon la source choisie,
+# afin que les tâches deb822 et .list restent génériques (DRY).
+- name: Select Varnish apt repository parameters.
+  ansible.builtin.set_fact:
+    varnish_apt_repo_uri: >-
+      {{ varnish_official_apt_repo_url
+         if varnish_apt_repo_source == 'official'
+         else varnish_packagecloud_apt_repo_url }}
+    varnish_apt_repo_key_url: >-
+      {{ varnish_official_apt_key_url
+         if varnish_apt_repo_source == 'official'
+         else varnish_packagecloud_apt_key_url }}
+  when: varnish_apt_repo_source != 'distribution'
+
+# Format moderne deb822 : le module télécharge la clé dans
+# /etc/apt/keyrings/varnish.asc et écrit le Signed-By correspondant.
+- name: Add Varnish apt repository (deb822).
+  ansible.builtin.deb822_repository:
+    name: varnish
+    types: [deb]
+    uris: "{{ varnish_apt_repo_uri }}"
+    suites: "{{ ansible_facts.distribution_release }}"
+    components: [main]
+    signed_by: "{{ varnish_apt_repo_key_url }}"
+    state: present
+  when:
+    - varnish_apt_repo_source != 'distribution'
+    - varnish_apt_use_deb822 | bool
+
+# Repli format .list : la clé est déposée dans /usr/share/keyrings au
+# chemin exact référencé par signed-by (cohérence clé <-> dépôt).
+- name: Add Varnish apt signing key (legacy .list).
+  ansible.builtin.get_url:
+    url: "{{ varnish_apt_repo_key_url }}"
+    dest: /usr/share/keyrings/varnish-archive-keyring.asc
+    mode: '0644'
+    force: true
+  when:
+    - varnish_apt_repo_source != 'distribution'
+    - not (varnish_apt_use_deb822 | bool)
+
+- name: Add Varnish apt repository (legacy .list).
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/varnish-archive-keyring.asc] {{ varnish_apt_repo_uri }} {{ ansible_facts.distribution_release }} main"
+    filename: varnish
+    state: present
+  when:
+    - varnish_apt_repo_source != 'distribution'
+    - not (varnish_apt_use_deb822 | bool)
+
+# Épinglage de la version : indispensable car un dépôt « rolling » peut
+# servir plusieurs lignes (7.x, 8.x, 9.x) simultanément.
+- name: Pin Varnish package version.
+  ansible.builtin.template:
+    src: varnish.pref.j2
+    dest: /etc/apt/preferences.d/varnish.pref
+    owner: root
+    group: root
+    mode: '0644'
+  when: varnish_apt_pin_version | length > 0
+
+- name: Ensure Varnish is installed.
+  ansible.builtin.apt:
+    name: "{{ varnish_package_name }}"
+    state: present
+    update_cache: true
+
 - name: Ensure Varnish VMODs are installed.
-  apt:
+  ansible.builtin.apt:
     name: "{{ varnish_modules_package_name }}"
     state: present
   when: varnish_modules_package_name | length > 0
