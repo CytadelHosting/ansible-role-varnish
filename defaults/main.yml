@@ -61,6 +61,10 @@ varnish_packagecloud_apt_key_url: "https://packagecloud.io/varnishcache/{{ varni
 # Forcez à false pour garder l'ancien format .list (ex: Debian 11/12).
 varnish_apt_use_deb822: "{{ (ansible_facts.distribution == 'Debian' and ansible_facts.distribution_major_version | int >= 11) or (ansible_facts.distribution == 'Ubuntu' and ansible_facts.distribution_version is version('20.04', '>=')) }}"
 
+# Paquets supplémentaires ajoutés à la liste install de la source active
+# (ex: varnish-dev). Voir vars/Debian.yml -> varnish_apt_packages_by_source.
+varnish_apt_extra_packages: []
+
 # Épinglage (apt pinning) de la version, dérivé de varnish_version :
 #   '8.0'   -> '8.0*'   (dernier patch de la ligne 8.0.x)
 #   '8.0.2' -> '8.0.2*' (cible exacte)

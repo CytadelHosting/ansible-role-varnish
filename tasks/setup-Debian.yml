@@ -6,8 +6,7 @@
       - gnupg2
     state: present
 
-# On centralise URL du dépôt et URL de la clé selon la source choisie,
-# afin que les tâches deb822 et .list restent génériques (DRY).
+# Sélectionne dépôt, clé GPG et listes de paquets selon la source active.
 - name: Select Varnish apt repository parameters.
   ansible.builtin.set_fact:
     varnish_apt_repo_uri: >-
@@ -18,7 +17,21 @@
       {{ varnish_official_apt_key_url
          if varnish_apt_repo_source == 'official'
          else varnish_packagecloud_apt_key_url }}
+    varnish_apt_install_packages: >-
+      {{ varnish_apt_packages_by_source[varnish_apt_repo_source].install
+         + varnish_apt_extra_packages }}
+    varnish_apt_remove_packages: >-
+      {{ varnish_apt_packages_by_source[varnish_apt_repo_source].conflicts }}
   when: varnish_apt_repo_source != 'distribution'
+
+- name: Select Varnish apt package lists (distribution source).
+  ansible.builtin.set_fact:
+    varnish_apt_install_packages: >-
+      {{ varnish_apt_packages_by_source.distribution.install
+         + varnish_apt_extra_packages }}
+    varnish_apt_remove_packages: >-
+      {{ varnish_apt_packages_by_source.distribution.conflicts }}
+  when: varnish_apt_repo_source == 'distribution'
 
 # Nettoie l'ancien nom de fichier du fork (packagecloud) avant migration.
 - name: Remove obsolete Varnish apt source file.
@@ -96,12 +109,24 @@
 # state: present ne fait qu'assurer la présence du paquet, sans changer la version.
 - name: Ensure Varnish is installed.
   ansible.builtin.apt:
-    name: "{{ varnish_package_name }}"
+    name: "{{ varnish_apt_install_packages }}"
     state: "{{ 'latest' if varnish_apt_pin_version | length > 0 else 'present' }}"
     update_cache: true
+    autoremove: true
+
+# Retire les paquets incompatibles avec la source active (orphelins d'une
+# autre source, ex: libvarnishapi3 Debian après bascule vers official).
+- name: Remove conflicting Varnish packages for active repository source.
+  ansible.builtin.apt:
+    name: "{{ varnish_apt_remove_packages }}"
+    state: absent
+    purge: true
+    autoremove: true
+  when: varnish_apt_remove_packages | length > 0
 
 - name: Ensure Varnish VMODs are installed.
   ansible.builtin.apt:
     name: "{{ varnish_modules_package_name }}"
-    state: present
+    state: "{{ 'latest' if varnish_apt_pin_version | length > 0 else 'present' }}"
+    autoremove: true
   when: varnish_modules_package_name | length > 0

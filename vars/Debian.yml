@@ -1,3 +1,25 @@
 ---
 varnish_sysvinit_config_path: /etc/default
 varnish_systemd_override_path: /etc/systemd/system
+
+# Paquets APT par source de dépôt.
+#   install   : paquets à installer / mettre à jour pour cette source
+#   conflicts : paquets à retirer lorsqu'on active cette source (orphelins
+#               d'une autre source, ex: libvarnishapi3 Debian après bascule
+#               vers le dépôt officiel qui embarque l'API)
+varnish_apt_packages_by_source:
+  official:
+    install:
+      - varnish
+    conflicts:
+      - libvarnishapi3
+  packagecloud:
+    install:
+      - varnish
+    conflicts:
+      - libvarnishapi3
+  distribution:
+    install:
+      - varnish
+      - libvarnishapi3
+    conflicts: []
