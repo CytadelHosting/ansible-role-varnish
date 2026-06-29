@@ -92,10 +92,12 @@
     mode: '0644'
   when: varnish_apt_pin_version | length > 0
 
+# state: latest requis pour appliquer le pinning (upgrade 7.7 -> 8.0, etc.).
+# state: present ne fait qu'assurer la présence du paquet, sans changer la version.
 - name: Ensure Varnish is installed.
   ansible.builtin.apt:
     name: "{{ varnish_package_name }}"
-    state: present
+    state: "{{ 'latest' if varnish_apt_pin_version | length > 0 else 'present' }}"
     update_cache: true
 
 - name: Ensure Varnish VMODs are installed.
