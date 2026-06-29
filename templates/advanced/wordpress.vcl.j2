@@ -1,0 +1,215 @@
+#
+# VCL WordPress / WooCommerce - généré par Ansible (rôle varnish).
+# Logique pré-positionnée ; options principales pilotées par varnish_vcl_config.
+# Compatible Varnish 6.x / 7.x / 8.x (syntaxe VCL 4.1).
+#
+vcl {{ varnish_vcl_version | default('4.1') }};
+
+{# Alias défensifs : le template fonctionne même si une clé est absente. #}
+{%- set vcl = varnish_vcl_config | default({}) %}
+{%- set vcl_acls = vcl.acls | default({}) %}
+{%- set vcl_static = vcl.static_files | default({}) %}
+{%- set vcl_cache = vcl.cache_control | default({}) %}
+{%- set vcl_https = vcl.https | default({}) %}
+{%- set vcl_clean = vcl.request_cleaning | default({}) %}
+{%- set vcl_cookies = vcl.cookies | default({}) %}
+{%- set vcl_security = vcl.security | default({}) %}
+{%- set purge_hosts = vcl_acls.purge | default(varnish_purge_hosts | default([])) %}
+{%- set https_ports = vcl_https.detect_ports | default([443, 8443]) %}
+
+{% for module in vcl.imports | default(['std']) %}
+import {{ module }};
+{% endfor %}
+
+# Backend par défaut : serveur d'origine (nginx/apache/php-fpm).
+backend default {
+    .host = "{{ varnish_default_backend_host }}";
+    .port = "{{ varnish_default_backend_port }}";
+}
+
+{% if varnish_backends is defined %}
+# Backends additionnels.
+{% for backend, value in varnish_backends.items() | list %}
+backend {{ backend }} {
+    .host = "{{ value.host }}";
+    .port = "{{ value.port }}";
+}
+{% endfor %}
+{% endif %}
+
+# ACL des clients autorisés à envoyer des requêtes PURGE.
+acl purge {
+{% for host in purge_hosts %}
+    "{{ host }}";
+{% endfor %}
+}
+
+sub vcl_recv {
+    # Cache-Control: no-cache côté client -> on ne sert pas depuis le cache.
+    if (req.http.Cache-Control ~ "no-cache") {
+        set req.http.X-Cacheable = "NO:Cache-Control=no-cache";
+        return(pass);
+    }
+
+{% if vcl_clean.strip_empty_query | default(true) %}
+    # Supprime un point d'interrogation final sans paramètre (".../?").
+    if (req.url ~ "\?$") {
+        set req.url = regsub(req.url, "\?$", "");
+    }
+{% endif %}
+
+{% if vcl_clean.normalize_host | default(true) %}
+    # Normalise l'en-tête Host (retire le port).
+    set req.http.Host = regsub(req.http.Host, ":[0-9]+", "");
+{% endif %}
+
+{% if vcl_clean.sort_query | default(true) %}
+    # Trie les paramètres de query string pour normaliser la clé de cache.
+    set req.url = std.querysort(req.url);
+{% endif %}
+
+{% for header in vcl_security.remove_headers | default([]) %}
+    # Sécurité : suppression de l'en-tête {{ header }}.
+    unset req.http.{{ header }};
+{% endfor %}
+
+    # Positionne X-Forwarded-Proto quand la requête arrive en HTTPS.
+    if (!req.http.X-Forwarded-Proto) {
+        if (std.port(server.ip) == {{ https_ports[0] }}{% for port in https_ports[1:] %} || std.port(server.ip) == {{ port }}{% endfor %}) {
+            set req.http.X-Forwarded-Proto = "https";
+        } else {
+            set req.http.X-Forwarded-Proto = "http";
+        }
+    }
+
+    # Gestion des PURGE (plugin Proxy Cache Purge / varnish-http-purge).
+    if (req.method == "PURGE") {
+        if (!client.ip ~ purge) {
+            return(synth(405, "PURGE not allowed for this IP address"));
+        }
+        if (req.http.X-Purge-Method == "regex") {
+            ban("obj.http.x-url ~ " + req.url + " && obj.http.x-host == " + req.http.host);
+            return(synth(200, "Purged"));
+        }
+        ban("obj.http.x-url == " + req.url + " && obj.http.x-host == " + req.http.host);
+        return(synth(200, "Purged"));
+    }
+
+    # Méthodes HTTP non standard -> on bascule en pipe.
+    if (
+        req.method != "GET" &&
+        req.method != "HEAD" &&
+        req.method != "PUT" &&
+        req.method != "POST" &&
+        req.method != "PATCH" &&
+        req.method != "TRACE" &&
+        req.method != "OPTIONS" &&
+        req.method != "DELETE"
+    ) {
+        return (pipe);
+    }
+
+    # Seules les requêtes GET/HEAD sont cacheables.
+    if (req.method != "GET" && req.method != "HEAD") {
+        set req.http.X-Cacheable = "NO:REQUEST-METHOD";
+        return(pass);
+    }
+
+{% if vcl_static.extensions | default('') %}
+    # Fichiers statiques : marqués et débarrassés de leurs cookies.
+    if (req.url ~ "^[^?]*\.({{ vcl_static.extensions }})(\?.*)?$") {
+        set req.http.X-Static-File = "true";
+        unset req.http.Cookie;
+        return(hash);
+    }
+{% endif %}
+
+    # URLs jamais mises en cache (back-office, panier, compte, etc.).
+    if (
+        req.http.Authorization{% for url in vcl.skip_cache_urls | default([]) %} ||
+        req.url ~ "{{ url }}"{% endfor %}
+
+    ) {
+        set req.http.X-Cacheable = "NO:Logged in/Got Sessions";
+        if (req.http.X-Requested-With == "XMLHttpRequest") {
+            set req.http.X-Cacheable = "NO:Ajax";
+        }
+        return(pass);
+    }
+
+    # Plus aucun cookie utile : on nettoie et on met en cache.
+    unset req.http.Cookie;
+    return(hash);
+}
+
+sub vcl_hash {
+    # Variation de cache selon le protocole (http/https).
+    if (req.http.X-Forwarded-Proto) {
+        hash_data(req.http.X-Forwarded-Proto);
+    }
+}
+
+sub vcl_backend_response {
+    # Cache-Control: no-cache côté backend -> non cacheable.
+    if (beresp.http.Cache-Control ~ "no-cache") {
+        set beresp.uncacheable = true;
+        set beresp.ttl = 0s;
+        set beresp.http.X-Cacheable = "NO:Cache-Control=no-cache";
+    }
+
+    # Injecte URL et Host dans l'objet pour le bannissement asynchrone (PURGE).
+    set beresp.http.x-url = bereq.url;
+    set beresp.http.x-host = bereq.http.host;
+
+    # TTL par défaut si le backend ne fournit pas de Cache-Control.
+    if (!beresp.http.Cache-Control) {
+        set beresp.ttl = {{ vcl_cache.default_ttl | default('1h') }};
+        set beresp.http.X-Cacheable = "YES:Forced";
+    }
+
+{% if vcl_static.ttl | default('') %}
+    # Fichiers statiques : TTL dédié et suppression des cookies.
+    if (bereq.http.X-Static-File == "true") {
+        unset beresp.http.Set-Cookie;
+        set beresp.http.X-Cacheable = "YES:Forced";
+        set beresp.ttl = {{ vcl_static.ttl }};
+    }
+{% endif %}
+
+{% if vcl_cookies.strip_patterns | default([]) %}
+    # Cookies non bloquants : on retire le Set-Cookie correspondant.
+    if (beresp.http.Set-Cookie ~ "{{ vcl_cookies.strip_patterns | join('|') }}") {
+        unset beresp.http.Set-Cookie;
+    }
+{% endif %}
+
+    # Un Set-Cookie restant ou un Cache-Control private rend l'objet non cacheable.
+    if (beresp.http.Set-Cookie) {
+        set beresp.http.X-Cacheable = "NO:Got Cookies";
+    } elseif (beresp.http.Cache-Control ~ "private") {
+        set beresp.http.X-Cacheable = "NO:Cache-Control=private";
+    }
+
+    set beresp.http.X-Cache = "MISS";
+}
+
+sub vcl_deliver {
+    # En-tête de diagnostic HIT/MISS.
+    if (obj.hits > 0) {
+        set resp.http.X-Cache = "HIT";
+        set resp.http.X-Cache-Hits = obj.hits;
+        set resp.http.X-Cache-TTL = obj.ttl;
+    } else {
+        set resp.http.X-Cache = "MISS";
+    }
+
+    if (req.http.X-Cacheable) {
+        set resp.http.X-Cacheable = req.http.X-Cacheable;
+    } elseif (!resp.http.X-Cacheable) {
+        set resp.http.X-Cacheable = "YES";
+    }
+
+    # Nettoyage des en-têtes internes avant envoi au client.
+    unset resp.http.x-url;
+    unset resp.http.x-host;
+}

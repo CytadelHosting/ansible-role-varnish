@@ -47,6 +47,34 @@
     - reload systemd
     - restart varnish
 
+# Override partiel via drop-in : on garde le unit du paquet intact et on
+# redéfinit uniquement ExecStart (adresse d'écoute, storage, etc.).
+# Alternative légère à varnish_role_override_startup_scripts.
+- name: Ensure Varnish systemd drop-in directory exists.
+  file:
+    path: "{{ varnish_systemd_override_path }}/varnish.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+  when:
+    - varnish_systemd_dropin | bool
+    - not varnish_role_override_startup_scripts
+
+- name: Deploy Varnish systemd ExecStart drop-in.
+  template:
+    src: varnish.service.override.conf.j2
+    dest: "{{ varnish_systemd_override_path }}/varnish.service.d/override.conf"
+    owner: root
+    group: root
+    mode: 0644
+  when:
+    - varnish_systemd_dropin | bool
+    - not varnish_role_override_startup_scripts
+  notify:
+    - reload systemd
+    - restart varnish
+
 - name: Copy Varnish configuration (systemd).
   template:
     src: varnish.params.j2

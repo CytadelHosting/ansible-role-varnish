@@ -9,6 +9,13 @@ varnish_version: "6.6"
 # geerlingguy: true
 varnish_role_override_startup_scripts: false
 
+# Override PARTIEL du démarrage via un drop-in systemd : le unit du paquet
+# reste intact, on redéfinit seulement ExecStart (adresse/port d'écoute,
+# admin, storage, varnishd_extra_options). C'est le moyen recommandé pour
+# faire écouter Varnish ailleurs que sur le port par défaut du paquet.
+# Ignoré si varnish_role_override_startup_scripts vaut true.
+varnish_systemd_dropin: true
+
 # 644 in geerlingguy role, 600 in default distribution package
 varnish_secret_file_privileges: '600'
 
@@ -72,6 +79,57 @@ varnish_apt_extra_packages: []
 # Mettez '' pour désactiver l'épinglage et laisser apt choisir la plus récente.
 varnish_apt_pin_version: "{{ varnish_version }}*"
 varnish_apt_pin_priority: "1001"
+
+# --- VCL avancé (bibliothèque de templates CMS) ---------------------------
+# Pour un VCL riche, pointez varnish_default_vcl_template_path vers un
+# template de la bibliothèque, ex :
+#   varnish_default_vcl_template_path: advanced/wordpress.vcl.j2
+# Les options principales sont injectées via varnish_vcl_config ci-dessous ;
+# le gros de la logique (purge, cache, sécurité) est pré-positionné dans le
+# template. Surchargez tout ou partie de ce dict dans vos group_vars.
+varnish_vcl_config:
+  # Modules (VMODs) importés en tête de VCL.
+  imports:
+    - std
+  # ACLs (clé -> liste d'hôtes/IP/CIDR autorisés).
+  acls:
+    purge:
+      - localhost
+      - "127.0.0.1"
+      - "::1"
+  # Fichiers statiques : extensions mises en cache et durée de vie associée.
+  static_files:
+    extensions: "7z|avi|bmp|bz2|css|csv|doc|docx|eot|flac|flv|gif|gz|ico|jpeg|jpg|js|less|mka|mkv|mov|mp3|mp4|mpeg|mpg|odt|ogg|ogm|opus|otf|pdf|png|ppt|pptx|rar|rtf|svg|svgz|swf|tar|tbz|tgz|ttf|txt|txz|wav|webm|webp|woff|woff2|xls|xlsx|xml|xz|zip"
+    ttl: "1d"
+  # TTL par défaut appliqué quand le backend ne renvoie pas de Cache-Control.
+  cache_control:
+    default_ttl: "1h"
+  # URLs jamais mises en cache (motifs regex testés sur req.url).
+  skip_cache_urls:
+    - "^/wp-admin"
+    - "^/wp-login.php"
+    - "^/cart"
+    - "^/checkout"
+    - "^/my-account"
+  # En-têtes de requête supprimés pour des raisons de sécurité.
+  security:
+    remove_headers:
+      - proxy
+  # Ports considérés comme HTTPS pour positionner X-Forwarded-Proto.
+  https:
+    detect_ports:
+      - 443
+      - 8443
+  # Normalisations de requête (cache hit ratio).
+  request_cleaning:
+    strip_empty_query: true
+    normalize_host: true
+    sort_query: true
+  # Cookies dont la présence ne doit pas empêcher la mise en cache.
+  cookies:
+    strip_patterns:
+      - "wfvt_"
+      - "wordfence_verifiedHuman"
 
 # Optionally define additional backends.
 # varnish_backends:
