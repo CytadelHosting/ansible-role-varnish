@@ -1,5 +1,5 @@
 {% if varnish_version is version('4.0', '>=') %}
-vcl 4.0;
+vcl {{ varnish_vcl_version }};
 {% endif %}
 
 # This is a basic VCL configuration file for varnish.  See the vcl(7)
